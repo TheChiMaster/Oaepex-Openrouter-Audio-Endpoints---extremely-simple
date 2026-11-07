@@ -1,3 +1,5 @@
 *.mp3
 /backend/.venv
 *.env
+Text to speech openrouter documentation.txt
+/Oapex-front-end/node_modules/
