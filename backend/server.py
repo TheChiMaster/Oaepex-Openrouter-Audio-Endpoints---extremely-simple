@@ -33,8 +33,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Known voice identifiers per provider family, used to pre-fill the front
-# end's voice combo box. Providers not listed fall back to free text entry.
+# Fallback voice identifiers per provider family, used only when a model
+# does not report its own `supported_voices` via the Models API. Providers
+# not listed fall back to free text entry.
 KNOWN_VOICES: dict[str, list[str]] = {
     "openai": [
         "alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx",
@@ -167,6 +168,12 @@ def list_models(request: Request) -> JSONResponse:
 
         for model, caps in zip(models, results):
             provider_slug = model["id"].split("/")[0]
+            # Prefer the live voice list from the Models API; only fall back
+            # to the static table when the model reports none (e.g. models
+            # that rely on voice cloning / reference audio instead of IDs).
+            voices = model.get("supported_voices") or KNOWN_VOICES.get(
+                provider_slug, []
+            )
             enriched.append(
                 {
                     "id": model["id"],
@@ -174,7 +181,7 @@ def list_models(request: Request) -> JSONResponse:
                     "context_length": model.get("context_length"),
                     "pricing": model.get("pricing", {}),
                     "capabilities": caps,
-                    "known_voices": KNOWN_VOICES.get(provider_slug, []),
+                    "known_voices": voices,
                     "provider_slug": provider_slug,
                 }
             )
