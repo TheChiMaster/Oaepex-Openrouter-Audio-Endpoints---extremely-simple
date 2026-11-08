@@ -11,6 +11,7 @@ client. The API key is only ever held in memory for the duration of a request.
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import httpx
@@ -62,6 +63,31 @@ def auth_headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
 
+def parse_pcm_params(
+    content_type: str | None,
+    default_rate: int = 24000,
+    default_channels: int = 1,
+) -> tuple[int, int]:
+    """Parse sample rate and channel count from OpenRouter's Content-Type.
+
+    Raw PCM responses carry their metadata as header directives, e.g.
+    `audio/pcm;rate=44100;channels=2`. Both values differ per provider
+    (Fish Audio emits 44.1 kHz; some providers stream stereo), so they must
+    be read per response rather than assumed. Falls back to 24 kHz mono
+    when a directive is absent.
+    """
+    sample_rate = default_rate
+    channels = default_channels
+    if content_type:
+        rate_match = re.search(r"rate=(\d+)", content_type, re.IGNORECASE)
+        if rate_match:
+            sample_rate = int(rate_match.group(1))
+        channel_match = re.search(r"channels=(\d+)", content_type, re.IGNORECASE)
+        if channel_match:
+            channels = int(channel_match.group(1))
+    return sample_rate, channels
+
+
 def wrap_pcm_as_wav(
     pcm: bytes,
     sample_rate: int = 24000,
@@ -71,10 +97,10 @@ def wrap_pcm_as_wav(
     """Prefix raw PCM bytes with a RIFF/WAVE header so browsers can play them.
 
     OpenRouter's `pcm` response format is a raw byte stream with no container,
-    which `<audio>` elements cannot play. Providers document it as 16-bit
-    little-endian mono PCM at 24 kHz (Azure explicitly; OpenAI and Gemini use
-    the same layout), so wrapping it in a minimal WAV header makes it playable
-    everywhere without re-encoding.
+    which `<audio>` elements cannot play. The stream is 16-bit little-endian
+    PCM; the sample rate and channel count come from the response's
+    Content-Type header (see `parse_pcm_params`) and must match, or playback
+    pitch/speed shift.
     """
     byte_rate = sample_rate * channels * bits_per_sample // 8
     block_align = channels * bits_per_sample // 8
@@ -267,11 +293,15 @@ async def speech(request: Request) -> Response:
     content = resp.content
     media_type = content_type
     # Raw PCM cannot be played by browser <audio> elements; wrap it in a
-    # minimal WAV container (24 kHz, 16-bit, mono) and serve it as audio/wav.
+    # minimal WAV container using the rate/channels from the Content-Type
+    # header and serve it as audio/wav.
     if content_type.split(";")[0].strip().lower() == "audio/pcm" or (
         body.get("response_format") == "pcm"
     ):
-        content = wrap_pcm_as_wav(content)
+        sample_rate, channels = parse_pcm_params(content_type)
+        content = wrap_pcm_as_wav(
+            content, sample_rate=sample_rate, channels=channels
+        )
         media_type = "audio/wav"
     return Response(
         content=content,
