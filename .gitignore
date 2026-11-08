@@ -3,3 +3,4 @@
 *.env
 Text to speech openrouter documentation.txt
 /Oapex-front-end/node_modules/
+/backend/__pycache__
