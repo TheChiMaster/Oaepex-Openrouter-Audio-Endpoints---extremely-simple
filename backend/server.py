@@ -62,6 +62,34 @@ def auth_headers(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
 
+def wrap_pcm_as_wav(
+    pcm: bytes,
+    sample_rate: int = 24000,
+    channels: int = 1,
+    bits_per_sample: int = 16,
+) -> bytes:
+    """Prefix raw PCM bytes with a RIFF/WAVE header so browsers can play them.
+
+    OpenRouter's `pcm` response format is a raw byte stream with no container,
+    which `<audio>` elements cannot play. Providers document it as 16-bit
+    little-endian mono PCM at 24 kHz (Azure explicitly; OpenAI and Gemini use
+    the same layout), so wrapping it in a minimal WAV header makes it playable
+    everywhere without re-encoding.
+    """
+    byte_rate = sample_rate * channels * bits_per_sample // 8
+    block_align = channels * bits_per_sample // 8
+    header = b"RIFF" + (36 + len(pcm)).to_bytes(4, "little") + b"WAVE"
+    header += b"fmt " + (16).to_bytes(4, "little")
+    header += (1).to_bytes(2, "little")  # 1 = uncompressed PCM
+    header += channels.to_bytes(2, "little")
+    header += sample_rate.to_bytes(4, "little")
+    header += byte_rate.to_bytes(4, "little")
+    header += block_align.to_bytes(2, "little")
+    header += bits_per_sample.to_bytes(2, "little")
+    header += b"data" + len(pcm).to_bytes(4, "little")
+    return header + pcm
+
+
 def describe_error(status: int, payload: Any) -> str:
     """Turn an OpenRouter error payload into a human readable message."""
     if isinstance(payload, dict):
@@ -236,9 +264,18 @@ async def speech(request: Request) -> Response:
         raise HTTPException(status_code=resp.status_code, detail=detail)
 
     content_type = resp.headers.get("content-type", "audio/mpeg")
+    content = resp.content
+    media_type = content_type
+    # Raw PCM cannot be played by browser <audio> elements; wrap it in a
+    # minimal WAV container (24 kHz, 16-bit, mono) and serve it as audio/wav.
+    if content_type.split(";")[0].strip().lower() == "audio/pcm" or (
+        body.get("response_format") == "pcm"
+    ):
+        content = wrap_pcm_as_wav(content)
+        media_type = "audio/wav"
     return Response(
-        content=resp.content,
-        media_type=content_type,
+        content=content,
+        media_type=media_type,
         headers={
             "X-Generation-Id": resp.headers.get("X-Generation-Id", ""),
             "Content-Disposition": 'inline; filename="generated-audio"',
