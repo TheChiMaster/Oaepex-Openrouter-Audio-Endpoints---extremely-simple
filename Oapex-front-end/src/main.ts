@@ -70,14 +70,13 @@ app.innerHTML = `
         <option value="">Loading models…</option>
       </select>
       <p id="model-status" role="status" aria-live="polite" class="hint"></p>
-      <div id="model-caps" class="caps" aria-live="polite"></div>
+      <div id="model-caps" class="caps" aria-live="false"></div>
     </section>
 
     <section class="card" aria-labelledby="text-heading">
       <h2 id="text-heading">3. Write your text</h2>
       <label for="text-input">Text to synthesize</label>
-      <textarea id="text-input" rows="6"
-        placeholder="Hello! This is a text-to-speech test."></textarea>
+      <textarea id="text-input" rows="6">If you combine 2 oxygen atoms with 1 hydrogen atom, you get a water molecule.</textarea>
     </section>
 
     <section class="card" aria-labelledby="params-heading">
@@ -252,7 +251,8 @@ function updateModelCaps(model: SpeechModel | null): void {
   if (caps.supports_multiple_audio_references) badges.push('multiple references')
   if (caps.supports_image_reference) badges.push('image reference')
   if (caps.pricing?.prompt) {
-    badges.push(`$${Number(caps.pricing.prompt).toPrecision(3)} / char`)
+    // Show per thousand characters to make life easier
+    badges.push(`$${(Number(caps.pricing.prompt) * 1000).toPrecision(2)} / thousand characters`)
   }
 
   modelCaps.textContent = badges.length
@@ -405,8 +405,8 @@ generateBtn.addEventListener('click', async () => {
     const genId = resp.headers.get('X-Generation-Id')
     setStatus(
       `Audio ready (${(blob.size / 1024).toFixed(1)} KiB)` +
-        (genId ? ` — generation ID: ${genId}` : '') +
-        '. Press play, or download it.',
+      (genId ? ` — generation ID: ${genId}` : '') +
+      '. Press play, or download it.',
       'success',
     )
   } catch (err) {
