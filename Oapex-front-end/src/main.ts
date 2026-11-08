@@ -437,11 +437,8 @@ generateBtn.addEventListener('click', async () => {
         /* Autoplay blocked by the browser; the user can press play. */
       })
     }
-    const genId = resp.headers.get('X-Generation-Id')
+    const genId = resp.headers.get('X-Generation-Id') // Keeping this here just in case
     setStatus(
-      `Audio ready (${(blob.size / 1024).toFixed(1)} KiB)` +
-      (genId ? ` — generation ID: ${genId}` : '') +
-      '. Press play, or download it.',
       'success',
     )
   } catch (err) {
