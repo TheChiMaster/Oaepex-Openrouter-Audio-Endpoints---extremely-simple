@@ -125,10 +125,41 @@ textarea {
   gap: 1rem;
 }
 
+.generate-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.check-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 400;
+  margin: 0;
+  cursor: pointer;
+}
+
+.check-label input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .caps {
   margin-top: 0.5rem;
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+.caps-list {
+  margin: 0.25rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.caps-list li {
+  margin: 0.15rem 0;
 }
 
 .status {
@@ -198,3 +229,4 @@ footer {
   margin-top: 2rem;
   text-align: center;
 }
+

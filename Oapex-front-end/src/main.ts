@@ -126,7 +126,13 @@ app.innerHTML = `
 
     <section class="card" aria-labelledby="generate-heading">
       <h2 id="generate-heading">5. Generate</h2>
-      <button id="generate" type="button" class="primary">Generate audio</button>
+      <div class="generate-row">
+        <button id="generate" type="button" class="primary">Generate audio</button>
+        <label class="check-label" for="autoplay-check">
+          <input id="autoplay-check" type="checkbox" checked />
+          Auto-play
+        </label>
+      </div>
       <div id="status" role="status" aria-live="assertive" class="status"></div>
 
       <div id="result" class="hidden">
@@ -164,6 +170,7 @@ const cloneFile = document.querySelector<HTMLInputElement>('#clone-file')!
 const cloneTranscript = document.querySelector<HTMLInputElement>('#clone-transcript')!
 const clearClone = document.querySelector<HTMLButtonElement>('#clear-clone')!
 const generateBtn = document.querySelector<HTMLButtonElement>('#generate')!
+const autoplayCheck = document.querySelector<HTMLInputElement>('#autoplay-check')!
 const statusEl = document.querySelector<HTMLDivElement>('#status')!
 const resultEl = document.querySelector<HTMLDivElement>('#result')!
 const audioPlayer = document.querySelector<HTMLAudioElement>('#audio-player')!
@@ -240,24 +247,48 @@ function populateVoiceOptions(voices: string[]): void {
   voiceSelect.appendChild(custom)
 }
 
+function formatPricing(model: SpeechModel): string | null {
+  const pricing = model.pricing && Object.keys(model.pricing).length > 0
+    ? model.pricing
+    : model.capabilities?.pricing ?? {}
+  const prompt = Number(pricing.prompt ?? 0)
+  const completion = Number(pricing.completion ?? 0)
+  // Per-second models (e.g. Seed Audio) report their rate under `completion`
+  // and leave `prompt` at zero; everything else bills per input character.
+  if (completion > 0 && prompt === 0) {
+    return `$${(completion * 60).toPrecision(3)} per minute of audio`
+  }
+  if (prompt > 0) {
+    return `$${(prompt * 1000).toPrecision(3)} per 1,000 characters`
+  }
+  return null
+}
+
 function updateModelCaps(model: SpeechModel | null): void {
   modelCaps.innerHTML = ''
   cloneGroup.classList.add('hidden')
   if (!model) return
 
   const caps = model.capabilities ?? {}
-  const badges: string[] = []
-  if (caps.supports_voice_cloning) badges.push('voice cloning')
-  if (caps.supports_multiple_audio_references) badges.push('multiple references')
-  if (caps.supports_image_reference) badges.push('image reference')
-  if (caps.pricing?.prompt) {
-    // Show per thousand characters to make life easier
-    badges.push(`$${(Number(caps.pricing.prompt) * 1000).toPrecision(2)} / thousand characters`)
-  }
+  const items: string[] = []
+  if (caps.supports_voice_cloning) items.push('Voice cloning')
+  if (caps.supports_multiple_audio_references) items.push('Multiple reference clips')
+  if (caps.supports_image_reference) items.push('Image reference')
+  const price = formatPricing(model)
+  if (price) items.push(price)
 
-  modelCaps.textContent = badges.length
-    ? `Capabilities: ${badges.join(' · ')}`
-    : 'No special capabilities reported for this model.'
+  if (items.length > 0) {
+    const list = document.createElement('ul')
+    list.className = 'caps-list'
+    for (const item of items) {
+      const li = document.createElement('li')
+      li.textContent = item
+      list.appendChild(li)
+    }
+    modelCaps.appendChild(list)
+  } else {
+    modelCaps.textContent = 'No special capabilities reported for this model.'
+  }
 
   if (caps.supports_voice_cloning) {
     cloneGroup.classList.remove('hidden')
@@ -398,10 +429,14 @@ generateBtn.addEventListener('click', async () => {
     const blob = await resp.blob()
     if (currentAudioUrl) URL.revokeObjectURL(currentAudioUrl)
     currentAudioUrl = URL.createObjectURL(blob)
-    currentExtension = formatSelect.value === 'pcm' ? 'pcm' : 'mp3'
-
+    currentExtension = formatSelect.value === 'pcm' ? 'wav' : 'mp3'
     audioPlayer.src = currentAudioUrl
     resultEl.classList.remove('hidden')
+    if (autoplayCheck.checked) {
+      void audioPlayer.play().catch(() => {
+        /* Autoplay blocked by the browser; the user can press play. */
+      })
+    }
     const genId = resp.headers.get('X-Generation-Id')
     setStatus(
       `Audio ready (${(blob.size / 1024).toFixed(1)} KiB)` +
