@@ -49,8 +49,8 @@ app.innerHTML = `
       <p class="tagline">OpenRouter Audio Endpoints — text to speech, simply.</p>
     </header>
 
-    <section class="card" aria-labelledby="key-heading">
-      <h2 id="key-heading">1. API key</h2>
+    <section class="card">
+      <h2>1. API key</h2>
       <label for="api-key">OpenRouter API key</label>
       <div class="key-row">
         <input id="api-key" type="password" autocomplete="off"
@@ -67,8 +67,8 @@ app.innerHTML = `
       </p>
     </section>
 
-    <section class="card" aria-labelledby="models-heading">
-      <h2 id="models-heading">2. Choose a model</h2>
+    <section class="card">
+      <h2>2. Choose a model</h2>
       <label for="model-select">Speech model</label>
       <select id="model-select" aria-describedby="model-status">
         <option value="">Loading models…</option>
@@ -77,8 +77,8 @@ app.innerHTML = `
       <div id="model-caps" class="caps" aria-live="false"></div>
     </section>
 
-    <section class="card" aria-labelledby="params-heading">
-      <h2 id="params-heading">3. Parameters</h2>
+    <section class="card">
+      <h2>3. Parameters</h2>
 
       <div id="voice-group">
         <label for="voice-select">Voice</label>
@@ -122,14 +122,14 @@ app.innerHTML = `
       </div>
     </section>
 
-    <section class="card" aria-labelledby="text-heading">
-      <h2 id="text-heading">4. Write your text</h2>
+    <section class="card">
+      <h2>4. Write your text</h2>
       <label for="text-input">Text to synthesize</label>
       <textarea id="text-input" rows="6">If you combine 2 oxygen atoms with 1 hydrogen atom, you get a water molecule.</textarea>
     </section>
 
-    <section class="card" aria-labelledby="generate-heading">
-      <h2 id="generate-heading">5. Generate</h2>
+    <section class="card">
+      <h2>5. Generate</h2>
       <div class="generate-row">
         <button id="generate" type="button" class="primary">Generate audio</button>
         <label class="check-label" for="autoplay-check">
