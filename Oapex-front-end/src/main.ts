@@ -33,8 +33,8 @@ let models: SpeechModel[] = []
 let selectedModel: SpeechModel | null = null
 let currentAudioUrl: string | null = null
 let currentExtension = 'mp3'
+let serverKeyConfigured = false
 
-const API_KEY_STORAGE = 'oaepex.apiKey'
 
 /* ------------------------------------------------------------------ */
 /* App shell                                                           */
@@ -55,11 +55,15 @@ app.innerHTML = `
       <div class="key-row">
         <input id="api-key" type="password" autocomplete="off"
                placeholder="sk-or-v1-…" aria-describedby="key-help" />
-        <button id="save-key" type="button">Save key</button>
+        <button id="save-key" type="button" class="primary">Save key</button>
+        <button id="clear-key" type="button">Remove saved key</button>
       </div>
+      <p id="key-status" role="status" aria-live="polite" class="hint"></p>
       <p id="key-help" class="hint">
-        Stored only in this browser (localStorage) and sent only to your local
-        backend, which forwards it to OpenRouter. Never written to disc.
+        Your key is sent once to your local backend and stored in the
+        backend's .env file on your own computer — never in the browser,
+        never on any other server. After saving, you don't need to paste it
+        again. It is only ever used to talk to OpenRouter.
       </p>
     </section>
 
@@ -155,6 +159,8 @@ app.innerHTML = `
 
 const apiKeyInput = document.querySelector<HTMLInputElement>('#api-key')!
 const saveKeyBtn = document.querySelector<HTMLButtonElement>('#save-key')!
+const clearKeyBtn = document.querySelector<HTMLButtonElement>('#clear-key')!
+const keyStatus = document.querySelector<HTMLParagraphElement>('#key-status')!
 const modelSelect = document.querySelector<HTMLSelectElement>('#model-select')!
 const modelStatus = document.querySelector<HTMLParagraphElement>('#model-status')!
 const modelCaps = document.querySelector<HTMLDivElement>('#model-caps')!
@@ -219,14 +225,71 @@ function fileToDataUri(file: File): Promise<string> {
 }
 
 /* ------------------------------------------------------------------ */
-/* API key persistence                                                 */
+/* API key storage (server-side .env)                                  */
 /* ------------------------------------------------------------------ */
 
-apiKeyInput.value = localStorage.getItem(API_KEY_STORAGE) ?? ''
+function updateKeyStatus(): void {
+  if (serverKeyConfigured) {
+    keyStatus.textContent =
+      'A key is saved on your local backend. You can generate audio without pasting it again.'
+    keyStatus.className = 'hint success'
+  } else {
+    keyStatus.textContent = 'No key saved yet. Paste your key above and press “Save key”.'
+    keyStatus.className = 'hint'
+  }
+}
 
-saveKeyBtn.addEventListener('click', () => {
-  localStorage.setItem(API_KEY_STORAGE, apiKeyInput.value.trim())
-  setStatus('API key saved in this browser.', 'success')
+async function checkKeyStatus(): Promise<void> {
+  try {
+    const data = await fetchJson<{ configured: boolean }>('/api/key/status')
+    serverKeyConfigured = data.configured
+  } catch {
+    serverKeyConfigured = false
+  }
+  updateKeyStatus()
+}
+
+saveKeyBtn.addEventListener('click', async () => {
+  const key = apiKeyInput.value.trim()
+  if (!key) {
+    keyStatus.textContent = 'Paste your OpenRouter API key first.'
+    keyStatus.className = 'hint error'
+    return
+  }
+
+  saveKeyBtn.disabled = true
+  try {
+    await fetchJson<{ status: string }>('/api/key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+    })
+    // The key now lives in the backend's .env; drop it from the browser.
+    apiKeyInput.value = ''
+    serverKeyConfigured = true
+    updateKeyStatus()
+    setStatus('API key saved to your local backend.', 'success')
+  } catch (err) {
+    keyStatus.textContent = err instanceof Error ? err.message : String(err)
+    keyStatus.className = 'hint error'
+  } finally {
+    saveKeyBtn.disabled = false
+  }
+})
+
+clearKeyBtn.addEventListener('click', async () => {
+  clearKeyBtn.disabled = true
+  try {
+    await fetchJson<{ status: string }>('/api/key', { method: 'DELETE' })
+    apiKeyInput.value = ''
+    serverKeyConfigured = false
+    updateKeyStatus()
+    setStatus('Saved API key removed from your local backend.', 'info')
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : String(err), 'error')
+  } finally {
+    clearKeyBtn.disabled = false
+  }
 })
 
 /* ------------------------------------------------------------------ */
@@ -385,8 +448,8 @@ generateBtn.addEventListener('click', async () => {
     setStatus('Enter some text to synthesize.', 'error')
     return
   }
-  if (!getApiKey()) {
-    setStatus('Enter your OpenRouter API key first.', 'error')
+  if (!getApiKey() && !serverKeyConfigured) {
+    setStatus('Save your OpenRouter API key in step 1 first.', 'error')
     return
   }
 
@@ -437,10 +500,7 @@ generateBtn.addEventListener('click', async () => {
         /* Autoplay blocked by the browser; the user can press play. */
       })
     }
-    const genId = resp.headers.get('X-Generation-Id') // Keeping this here just in case
-    setStatus(
-      'success',
-    )
+    setStatus('Audio generated successfully.', 'success')
   } catch (err) {
     setStatus(err instanceof Error ? err.message : String(err), 'error')
   } finally {
@@ -460,4 +520,5 @@ downloadBtn.addEventListener('click', () => {
 /* Boot                                                                */
 /* ------------------------------------------------------------------ */
 
+void checkKeyStatus()
 void loadModels()

@@ -1,29 +1,44 @@
 """FastAPI backend for Oaepex - OpenRouter Audio Endpoints.
 
 Serves the front end with:
-  - GET  /api/models   : all available speech models + their endpoint parameters
-  - POST /api/speech   : text-to-speech generation, returns raw audio bytes
+  - GET    /api/models      : all available speech models + their endpoint parameters
+  - POST   /api/speech      : text-to-speech generation, returns raw audio bytes
+  - GET    /api/key/status  : whether an OpenRouter key is configured (never the key itself)
+  - POST   /api/key         : store the pasted key in the local .env file
+  - DELETE /api/key         : remove the stored key
 
-Nothing is ever written to disc here; audio is streamed straight back to the
-client. The API key is only ever held in memory for the duration of a request.
+Audio is streamed straight back to the client and never written to disc. The
+only file the backend ever writes is the local `.env`, which holds the API
+key the user pasted in the browser. That file lives on the user's own machine
+and is excluded from version control via .gitignore.
 """
 
 from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 import httpx
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key, unset_key
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-load_dotenv()
+# The .env file lives next to this module (the backend directory), so the
+# key is stored on the user's own machine regardless of where uvicorn was
+# launched from.
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(ENV_PATH)
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 ENV_API_KEY = os.getenv("openrouter_api_key", "")
+
+# OpenRouter keys look like `sk-or-v1-` followed by a long alphanumeric body.
+# The check is deliberately loose (no fixed length) so it keeps working if
+# OpenRouter changes the key format, while still catching obvious typos.
+OPENROUTER_KEY_PATTERN = re.compile(r"^sk-or-[A-Za-z0-9-]{20,}$")
 
 app = FastAPI(title="Oaepex Backend", version="0.1.0")
 
@@ -57,6 +72,79 @@ def get_api_key(request: Request) -> str:
     """API key from the request header, falling back to the .env secret."""
     key = request.headers.get("x-openrouter-key", "").strip()
     return key or ENV_API_KEY
+
+
+# Hard limits so a malicious or buggy client cannot exhaust memory by
+# posting huge payloads (audio references are base64 data URIs).
+MAX_INPUT_CHARS = 20_000
+MAX_INSTRUCTIONS_CHARS = 2_000
+MAX_VOICE_CHARS = 500
+MAX_REFERENCE_BYTES = 20 * 1024 * 1024  # 20 MB per reference audio
+MAX_REFERENCES = 5
+ALLOWED_FORMATS = {"mp3", "wav", "pcm", "opus", "flac", "aac"}
+ALLOWED_SPEED = (0.25, 4.0)
+
+
+def _clean_str(value: Any, name: str, max_len: int) -> str:
+    """Validate an optional string field, returning '' when absent."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise HTTPException(status_code=422, detail=f"'{name}' must be a string.")
+    value = value.strip()
+    if len(value) > max_len:
+        raise HTTPException(
+            status_code=422,
+            detail=f"'{name}' exceeds the maximum of {max_len} characters.",
+        )
+    return value
+
+
+def _validate_references(raw: Any) -> list[dict[str, Any]]:
+    """Validate the optional `input_references` array (voice cloning)."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(
+            status_code=422, detail="'input_references' must be a non-empty array."
+        )
+    if len(raw) > MAX_REFERENCES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Too many references; the maximum is {MAX_REFERENCES}.",
+        )
+    refs: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=422, detail="Each reference must be an object."
+            )
+        if item.get("type") == "input_audio":
+            audio = item.get("input_audio")
+            if not isinstance(audio, dict) or not isinstance(audio.get("data"), str):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Audio references need an 'input_audio.data' string.",
+                )
+            # Data URIs are `data:<mime>;base64,<payload>`. Reject anything
+            # that would decode to more than MAX_REFERENCE_BYTES.
+            data = audio["data"]
+            if len(data) > MAX_REFERENCE_BYTES * 4 // 3 + 256:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Reference audio is too large (max 20 MB).",
+                )
+            refs.append({"type": "input_audio", "input_audio": {"data": data}})
+        elif item.get("type") == "text":
+            text = _clean_str(item.get("text"), "reference text", MAX_INPUT_CHARS)
+            if text:
+                refs.append({"type": "text", "text": text})
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="Reference types must be 'input_audio' or 'text'.",
+            )
+    return refs
 
 
 def auth_headers(api_key: str) -> dict[str, str]:
@@ -135,6 +223,74 @@ def describe_error(status: int, payload: Any) -> str:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------- #
+# API key storage                                                              #
+# --------------------------------------------------------------------------- #
+# The browser never persists the key. The user pastes it once, the front end
+# POSTs it here over localhost, and it is written to the backend's own .env
+# file on the user's machine. Subsequent requests need no key at all: the
+# backend reads it from the environment. The key is never echoed back to any
+# client — only a boolean "is a key configured" is exposed.
+
+
+@app.get("/api/key/status")
+def key_status() -> dict[str, bool]:
+    """Report whether an OpenRouter key is configured, without revealing it."""
+    return {"configured": bool(ENV_API_KEY)}
+
+
+@app.post("/api/key")
+async def save_key(request: Request) -> dict[str, str]:
+    """Validate the pasted key and store it in the local .env file."""
+    global ENV_API_KEY
+
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Request body must be JSON.")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+
+    key = str(body.get("key", "")).strip()
+    if not key or not OPENROUTER_KEY_PATTERN.match(key):
+        raise HTTPException(
+            status_code=422,
+            detail="That does not look like a valid OpenRouter API key. "
+            "Keys start with 'sk-or-' and come from "
+            "https://openrouter.ai/workspaces/default/keys",
+        )
+
+    try:
+        ENV_PATH.touch(exist_ok=True)
+        set_key(str(ENV_PATH), "openrouter_api_key", key)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not write the key to {ENV_PATH.name}: {exc}",
+        ) from exc
+
+    ENV_API_KEY = key
+    return {"status": "saved"}
+
+
+@app.delete("/api/key")
+def delete_key() -> dict[str, str]:
+    """Remove the stored key from the .env file and memory."""
+    global ENV_API_KEY
+
+    try:
+        if ENV_PATH.exists():
+            unset_key(str(ENV_PATH), "openrouter_api_key")
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not update {ENV_PATH.name}: {exc}",
+        ) from exc
+
+    ENV_API_KEY = ""
+    return {"status": "cleared"}
 
 
 @app.get("/api/models")
@@ -254,22 +410,54 @@ async def speech(request: Request) -> Response:
             "or set 'openrouter_api_key' in the backend .env file.",
         )
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Request body must be JSON.")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
 
-    payload: dict[str, Any] = {
-        "model": body.get("model"),
-        "input": body.get("input"),
-    }
-    for field in ("voice", "instructions", "response_format", "speed"):
-        if body.get(field) not in (None, ""):
-            payload[field] = body[field]
-    if body.get("input_references"):
-        payload["input_references"] = body["input_references"]
-    if isinstance(body.get("provider"), dict):
-        payload["provider"] = body["provider"]
-
-    if not payload["model"] or not payload["input"]:
+    model = _clean_str(body.get("model"), "model", MAX_VOICE_CHARS)
+    text = _clean_str(body.get("input"), "input", MAX_INPUT_CHARS)
+    if not model or not text:
         raise HTTPException(status_code=422, detail="Both 'model' and 'input' are required.")
+
+    payload: dict[str, Any] = {"model": model, "input": text}
+
+    voice = _clean_str(body.get("voice"), "voice", MAX_VOICE_CHARS)
+    if voice:
+        payload["voice"] = voice
+    instructions = _clean_str(body.get("instructions"), "instructions", MAX_INSTRUCTIONS_CHARS)
+    if instructions:
+        payload["instructions"] = instructions
+
+    response_format = _clean_str(body.get("response_format"), "response_format", 10)
+    if response_format:
+        if response_format not in ALLOWED_FORMATS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'response_format' must be one of: {', '.join(sorted(ALLOWED_FORMATS))}.",
+            )
+        payload["response_format"] = response_format
+
+    speed = body.get("speed")
+    if speed not in (None, ""):
+        if not isinstance(speed, (int, float)) or isinstance(speed, bool):
+            raise HTTPException(status_code=422, detail="'speed' must be a number.")
+        if not ALLOWED_SPEED[0] <= speed <= ALLOWED_SPEED[1]:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'speed' must be between {ALLOWED_SPEED[0]} and {ALLOWED_SPEED[1]}.",
+            )
+        payload["speed"] = speed
+
+    references = _validate_references(body.get("input_references"))
+    if references:
+        payload["input_references"] = references
+
+    provider = body.get("provider")
+    if isinstance(provider, dict):
+        payload["provider"] = provider
 
     try:
         async with httpx.AsyncClient(timeout=120) as client:
@@ -309,6 +497,7 @@ async def speech(request: Request) -> Response:
         headers={
             "X-Generation-Id": resp.headers.get("X-Generation-Id", ""),
             "Content-Disposition": 'inline; filename="generated-audio"',
+            "X-Content-Type-Options": "nosniff",
         },
     )
 
