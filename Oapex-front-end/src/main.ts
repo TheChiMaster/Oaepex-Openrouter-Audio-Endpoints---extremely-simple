@@ -73,14 +73,8 @@ app.innerHTML = `
       <div id="model-caps" class="caps" aria-live="false"></div>
     </section>
 
-    <section class="card" aria-labelledby="text-heading">
-      <h2 id="text-heading">3. Write your text</h2>
-      <label for="text-input">Text to synthesize</label>
-      <textarea id="text-input" rows="6">If you combine 2 oxygen atoms with 1 hydrogen atom, you get a water molecule.</textarea>
-    </section>
-
     <section class="card" aria-labelledby="params-heading">
-      <h2 id="params-heading">4. Parameters</h2>
+      <h2 id="params-heading">3. Parameters</h2>
 
       <div id="voice-group">
         <label for="voice-select">Voice</label>
@@ -122,6 +116,12 @@ app.innerHTML = `
         <input id="clone-transcript" type="text" placeholder="What the reference audio says" />
         <button id="clear-clone" type="button" class="ghost">Clear reference file</button>
       </div>
+    </section>
+
+    <section class="card" aria-labelledby="text-heading">
+      <h2 id="text-heading">4. Write your text</h2>
+      <label for="text-input">Text to synthesize</label>
+      <textarea id="text-input" rows="6">If you combine 2 oxygen atoms with 1 hydrogen atom, you get a water molecule.</textarea>
     </section>
 
     <section class="card" aria-labelledby="generate-heading">
